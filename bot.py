@@ -1,51 +1,107 @@
-from aiogram import Bot, Dispatcher, executor, types
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types.reply_keyboard import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.utils import executor
 
-TOKEN_API = "6292399749:AAEL2xgOXJGC7NnFtUMu1xujM6upo8FxZ2M"
-
-bot = Bot(TOKEN_API)
-dp = Dispatcher(bot)
+from io import open
 
 def TeleBot():
-    # Создаем клавиатуру
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    # Добавляем кнопку, при нажатии на которую появятся еще три кнопки
-    more_button = types.KeyboardButton('Запись на прием')
-    keyboard.add(more_button)
+    logging.basicConfig(level=logging.INFO)
+    bot = Bot(token="6292399749:AAEL2xgOXJGC7NnFtUMu1xujM6upo8FxZ2M")
+    storage = MemoryStorage()
+    dp = Dispatcher(bot, storage=storage)
 
-    # Добавляем еще три кнопки
-    button1 = types.KeyboardButton('Ввод ФИО')
-    button2 = types.KeyboardButton("Врач")
+    class Marathon(StatesGroup):
+        name = State()
+        distance = State()
+        namePoisk = State()
+        datetime = State()
 
-    # Обработчик команды /start
+    available_slots = {
+        'Пн': ['14:00 - 16:00'],
+        'Вт': ['10:00 - 12:00', '14:00 - 16:00'],
+        'Ср': ['16:00 - 18:00'],
+        'Чт': ['10:00 - 12:00'],
+        'Пт': ['14:00 - 16:00'],
+        'Сб': ['10:00 - 12:00'],
+        'Вс': ['16:00 - 18:00']
+    }
+
     @dp.message_handler(commands=['start'])
-    async def process_start_command(message: types.Message):
-        # Отправляем сообщение с кнопкой
-        await message.reply("Нажмите на кнопку, чтобы появились еще три кнопки", reply_markup=keyboard)
+    async def start_command(message: types.Message):
+        text = f'Привет, {message.chat.username}! Я бот, который записывает на прием к врачу.\n'
+        global mainMenu
+        mainMenu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        buttons = ['Записаться на прием', 'К кому я записан?']
+        mainMenu.add(*buttons)
+        await message.reply(text, reply_markup=mainMenu)
 
-    # Обработчик нажатия на кнопку "Запись на прием"
-    @dp.message_handler(lambda message: message.text == 'Запись на прием')
-    async def process_more_button(message: types.Message):
-        # Отправляем сообщение с тремя кнопками
-        await message.reply("Выберите действие",
-                            reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).row(button1, button2))
+    @dp.message_handler(text=['Записаться на прием'])
+    async def write(message: types.Message):
+        text = 'Введите ваши ФИО'
+        await message.reply(text, reply=False)
+        await Marathon.name.set()
 
-    # Обработчик нажатия на кнопку "Врач"
-    @dp.message_handler(lambda message: message.text == 'Врач')
-    async def process_doctor_button(message: types.Message):
-        # Отправляем сообщение с инлайн кнопками
-        inline_keyboard = types.InlineKeyboardMarkup()
-        inline_keyboard.add(
-            types.InlineKeyboardButton('Хирург', callback_data='Хирург'),
-            types.InlineKeyboardButton('Терапевт', callback_data='Терапевт'),
-            types.InlineKeyboardButton('Стоматолог', callback_data='Стоматолог'),
-            types.InlineKeyboardButton('Дерматолог', callback_data='Дерматолог')
-        )
-        await bot.send_message(chat_id=message.chat.id, text='Выберите врача:', reply_markup=inline_keyboard)
+    @dp.message_handler(state=Marathon.name)
+    async def process_name(message: types.Message, state: FSMContext):
+        async with state.proxy() as marathonData:
+            marathonData['name'] = message.text
+        text = f"Хорошо, {message.text}. Осталось выбрать специалиста."
+        buttons = ReplyKeyboardMarkup(resize_keyboard=True).add(
+            KeyboardButton('Стоматолог'), KeyboardButton('Дерматолог'), KeyboardButton('Эпилептолог'), KeyboardButton('Терапевт'))
+        await message.reply(text, reply_markup=buttons)
+        await Marathon.distance.set()
 
-    # Обработчик нажатия на инлайн кнопку
-    @dp.callback_query_handler(lambda c: c.data)
-    async def process_callback_button(callback_query: types.CallbackQuery):
-        await bot.answer_callback_query(callback_query.id)
-        await bot.send_message(chat_id=callback_query.from_user.id, text=f'Вы выбрали врача {callback_query.data}')
+    @dp.message_handler(text=['К кому я записан?'])
+    async def start(message: types.Message):
+        text = 'Введите ваши ФИО для поиска'
+        await message.reply(text, reply=False)
+        await Marathon.namePoisk.set()
+
+    @dp.message_handler(state=Marathon.namePoisk)
+    async def process_namePoisk(message: types.Message, state: FSMContext):
+        async with state.proxy() as marathonData:
+            marathonData['namePoisk'] = message.text
+        with open('doctor.txt', 'r') as f:
+            appointments = f.read()
+            found_appointments = appointments if marathonData['namePoisk'] in appointments else None
+        if found_appointments:
+            mes = f'Ваша запись на прием:\n{found_appointments}'
+        else:
+            mes = 'Вы не записывались!'
+        await message.reply(mes, reply=False)
+        await state.finish()
+
+    @dp.message_handler(state=Marathon.distance)
+    async def process_distance(message: types.Message, state: FSMContext):
+        async with state.proxy() as marathonData:
+            marathonData['distance'] = message.text
+        text = f"Отлично, вы выбрали специалиста: {message.text}! Теперь выберите дату и время:"
+        buttons = ReplyKeyboardMarkup(resize_keyboard=True)
+        for day, slots in available_slots.items():
+            buttons.add(KeyboardButton(f'{day}: {" - ".join(slots)}'))
+        await message.reply(text, reply_markup=buttons)
+        await Marathon.datetime.set()
+
+    @dp.message_handler(state=Marathon.datetime)
+    async def process_datetime(message: types.Message, state: FSMContext):
+        async with state.proxy() as marathonData:
+            marathonData['datetime'] = message.text
+        text = "Спасибо! Я сохранил ваши данные. Вы записаны на прием по следующим параметрам:"
+        text += f"\nФИО: {marathonData['name']}"
+        text += f"\nСпециалист: {marathonData['distance']}"
+        text += f"\nДата и время: {marathonData['datetime']}"
+        await message.reply(text, reply_markup=mainMenu)
+
+        # Write data to the file
+        with open('doctor.txt', 'a') as f:
+            f.write(f"ФИО: {marathonData['name']}\n")
+            f.write(f"Специалист: {marathonData['distance']}\n")
+            f.write(f"Дата и время: {marathonData['datetime']}\n\n")
+
+        await state.finish()
 
     executor.start_polling(dp, skip_updates=True)
