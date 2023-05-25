@@ -1,5 +1,8 @@
+import bot
 
 if __name__ == '__main__':
-    print_hi('PyCharm')
+    bot.TeleBot()
+
+
 
 
